@@ -3,6 +3,8 @@ package main
 import (
     "net/http"
     "fmt"
+    "encoding/json"
+    "strings"
 )
 
 func main() {
@@ -58,5 +60,64 @@ func resetHandler(w http.ResponseWriter, r *http.Request) {
 
 /* valChirpHandler validates the post request from the user */
 func valChirpHandler(w http.ResponseWriter, r *http.Request) {
+    type getData struct {
+        Body string `json:"body"`
+    }
+    type sendData struct {
+        Error string `json:"error"`
+        Valid bool `json:"valid"`
+        Cleaned_body string `json:"cleaned_body"`
+    }
+
+    get := getData{}
+    decoder := json.NewDecoder(r.Body)
+    err := decoder.Decode(&get)
+    
+    if err != nil {
+        fmt.Println("error")
+    }
+
+    bodyStr := get.Body
+    if len(bodyStr) > 140 {
+       // encode response body
+       response := sendData{"Chirp is too long", false, ""}
+       dat, err := json.Marshal(response)
+
+       if err != nil {
+            fmt.Println("error encoding json")
+            return
+       }
+       w.WriteHeader(400)
+       w.Write([]byte(dat))
+       return
+    } 
+
+    response := sendData{}
+    response.Valid = true
+    response.Cleaned_body = rmProfane(bodyStr)
+
+    dat, err := json.Marshal(response)
+    if err != nil {
+        fmt.Println("error encoding json 2")
+        return
+    }
+    w.Write([]byte(dat))
     return
+}
+
+// rmProfane replaces certain words with ****
+func rmProfane(opinion string) string {
+    forbiddenWords := []string{"kerfuffle", "sharbert", "fornax"}
+    lowerCaseOpinion := strings.ToLower(opinion)
+    opinionSplit := strings.Split(opinion, " ")
+
+    for _, val := range forbiddenWords {
+        splitstr := strings.Split(lowerCaseOpinion, " ")
+        for i, k := range splitstr {
+            if k == val {
+                opinionSplit[i] = "****"
+            }
+        }
+    }
+    return strings.Join(opinionSplit, " ")
 }
