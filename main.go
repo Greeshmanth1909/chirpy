@@ -5,11 +5,15 @@ import (
     "strconv"
     "fmt"
     "os"
-    "github.com/joho/godotenv"
     "encoding/json"
+    "encoding/hex"
     "strings"
+    "time"
+    "crypto/rand"
     "golang.org/x/crypto/bcrypt"
     "github.com/Greeshmanth1909/chirpy/database"
+    "github.com/golang-jwt/jwt/v5"
+    "github.com/joho/godotenv"
 )
 
 func main() {
@@ -33,7 +37,10 @@ func main() {
     serveMux.HandleFunc("GET /api/chirps", getChirps)
     serveMux.HandleFunc("GET /api/chirps/{chirpid}", getChirpById)
     serveMux.HandleFunc("POST /api/users", postUsers)
+    serveMux.HandleFunc("PUT /api/users", updateUsers)
     serveMux.HandleFunc("POST /api/login", loginUsers)
+    serveMux.HandleFunc("POST /api/refresh", refresh)
+    serveMux.HandleFunc("POST /api/revoke", revoke)
     server.ListenAndServe()
 }
 
@@ -175,6 +182,8 @@ type Email struct {
 type User struct {
         Id int `json:"id"`
         Email string `json:"email"`
+        Token string `json:"token"`
+        Refresh_token string `json:"refresh_token"`
 }
 
 /* postUsers function adds a user to the database and responds with the username and its corresponding id */
@@ -187,7 +196,7 @@ func postUsers(w http.ResponseWriter, r *http.Request) {
     }
 
     id, e := db.CreateUser(email.Email, email.Password)
-    user := User{id, e}
+    user := User{id, e, "", ""}
     dat, _ := json.Marshal(user)
     w.WriteHeader(201)
     w.Write(dat)
@@ -204,7 +213,7 @@ func loginUsers(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(401)
         return
     }
-    
+
     for _, val := range dat.Users {
         if val.Email == req.Email {
             err = bcrypt.CompareHashAndPassword(val.Hash, []byte(req.Password))
@@ -212,8 +221,28 @@ func loginUsers(w http.ResponseWriter, r *http.Request) {
                 w.WriteHeader(401)
                 return
             } else {
+                // Generate refresh token
+                c := 32
+                b := make([]byte, c)
+                rand.Read(b)
+                ref_token := hex.EncodeToString(b)
                 w.WriteHeader(200)
-                user := User{val.Id, val.Email}
+                var user User
+                user.Id = val.Id
+                user.Email = val.Email
+                user.Refresh_token = ref_token
+                var claims jwt.RegisteredClaims
+                claims.Issuer = "chirpy"
+                claims.IssuedAt = jwt.NewNumericDate(time.Now())
+                if req.Expires_in_seconds != 0 {
+                    claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Duration(req.Expires_in_seconds) * time.Second))
+                }
+                // add refresh token to the database
+                db.AddRefToken(val.Id, ref_token)
+                claims.Subject = string(val.Id)
+                token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+                jwt, _ := token.SignedString([]byte(hits.jwtSecret))
+                user.Token = jwt
                 dat, _ := json.Marshal(user)
                 w.Write(dat)
                 return
@@ -221,4 +250,90 @@ func loginUsers(w http.ResponseWriter, r *http.Request) {
         }
     }
     w.WriteHeader(401)
+}
+
+/* updateUsers function verifies the jwt and updates a user's email */
+func updateUsers(w http.ResponseWriter, r *http.Request) {
+    token := r.Header.Get("Authorization")
+    if token == "" {
+        w.WriteHeader(404)
+        return
+    }
+    token = strings.TrimPrefix(token, "Bearer ")
+    var claims jwt.RegisteredClaims
+    _ , err := jwt.ParseWithClaims(token, &claims, func(token *jwt.Token) (interface{}, error) {
+        return []byte(hits.jwtSecret), nil
+    })
+    if err != nil {
+        w.WriteHeader(401)
+        return
+    }
+
+    // read and update the database
+    i, _ := claims.GetSubject()
+    id, _ := strconv.Atoi(i)
+    // get fields that need to be updated
+    var user Email
+    decoder := json.NewDecoder(r.Body)
+    decoder.Decode(&user)
+    // user now has email and password
+    // Update username
+    db.UpdateUser(user.Email, user.Password, id)
+    var updatedUser User
+    updatedUser.Id = id + 1
+    updatedUser.Email = user.Email
+
+    data, _ := json.Marshal(updatedUser)
+    w.Write(data)
+}
+
+/* refresh function verifies the refresh token and generates a new jwt */
+func refresh(w http.ResponseWriter, r *http.Request) {
+    auth := r.Header.Get("Authorization")
+    auth = strings.TrimPrefix(auth, "Bearer ")
+    dat, _ := db.Read()
+    for _, val := range dat.Users {
+        if val.Refresh_token == auth {
+            // Generate new jwt
+                w.WriteHeader(200)
+                var user User
+                user.Id = val.Id
+                user.Email = val.Email
+                user.Refresh_token = auth
+                var claims jwt.RegisteredClaims
+                claims.Issuer = "chirpy"
+                claims.IssuedAt = jwt.NewNumericDate(time.Now())
+                claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Duration(60) * time.Minute))
+                // add refresh token to the database
+                claims.Subject = string(val.Id)
+                token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+                jwt, _ := token.SignedString([]byte(hits.jwtSecret))
+                user.Token = jwt
+                dat, _ := json.Marshal(user)
+                w.Write(dat)
+                return
+        }
+    }
+    w.WriteHeader(401)
+}
+
+/* revoke function removes the token */
+func revoke(w http.ResponseWriter, r *http.Request) {
+    auth := r.Header.Get("Authorization")
+    auth = strings.TrimPrefix(auth, "Bearer ")
+    
+    var user database.User
+    dat, _ := db.Read()
+    for _, val := range dat.Users {
+        if val.Refresh_token == auth {
+            user.Id = val.Id
+            user.Email = val.Email
+            user.Hash = val.Hash
+            user.Refresh_token = ""
+        }
+    }
+    mapId := user.Id - 1
+    dat.Users[mapId] = user
+    db.WriteDb(dat)
+    w.WriteHeader(204)
 }

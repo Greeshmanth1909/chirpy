@@ -23,6 +23,7 @@ type User struct {
     Id int `json:"id"`
     Email string `json:"email"`
     Hash []byte `json:"hash"`
+    Refresh_token string `json:"refresh_token"`
 }
 
 type Chirp struct {
@@ -121,7 +122,7 @@ func (db *DB) CreateUser(email, password string) (id int, username string){
     mapId := currentLength - 1
     userId := currentLength
     hash, _ := bcrypt.GenerateFromPassword([]byte(password), 10)
-    newUser := User{userId, email, hash}
+    newUser := User{userId, email, hash, ""}
 
     dat.Users[mapId] = newUser
     db.mu.Lock()
@@ -134,4 +135,44 @@ func (db *DB) CreateUser(email, password string) (id int, username string){
     os.WriteFile(db.path, str, 0666)
 
     return newUser.Id, newUser.Email
+}
+
+/* updateUser function updates the user's credentials in the database */
+func (db *DB) UpdateUser(userName, password string, id int) (int, string, error){
+    dat, err := db.Read()
+    if err != nil {
+        return 0, "", err
+    }
+    mapId := id - 1
+    var user User
+    user.Id = id
+    user.Email = userName
+    hash, _ := bcrypt.GenerateFromPassword([]byte(password), 10)
+    user.Hash = hash
+    dat.Users[mapId] = user
+    db.mu.Lock()
+    defer db.mu.Unlock()
+    str, _ := json.Marshal(dat)
+    os.WriteFile(db.path, str, 0666)
+    return dat.Users[mapId].Id, userName, nil
+}
+
+/* AddRefToken function adds the refresf token to the corresponding user id in the database */
+func (db *DB) AddRefToken(id int, token string) {
+    dat, _ := db.Read()
+    mapId := id - 1
+    user := User{id, dat.Users[mapId].Email, dat.Users[mapId].Hash, token}
+    dat.Users[mapId] = user
+    data, _ := json.Marshal(dat)
+    db.mu.Lock()
+    defer db.mu.Unlock()
+    os.WriteFile(db.path, data, 0666)
+}
+
+/* WriteDB writes data to db */
+func (db *DB) WriteDb(b Data) {
+    db.mu.Lock()
+    defer db.mu.Unlock()
+    data, _ := json.Marshal(b)
+    os.WriteFile(db.path, data, 0666)
 }
