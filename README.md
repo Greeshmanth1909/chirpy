@@ -1,5 +1,5 @@
 # chirpy
-A webserver built with Golang and a custom "database" that stores information in a `.json` file.
+A webserver that manages chirps(tweets), built with Golang and a custom "database" that stores information in a `.json` file.
 
 ### Requirements
 `go 1.22.2` or greater
@@ -12,6 +12,7 @@ A webserver built with Golang and a custom "database" that stores information in
 Run the server with `go run .` in the root or compile and execute the binary with `go build && ./chirpy`
 
 ### Endpoints
+1. `/app/api/healthz` checks the readyness of the server by returning `200 OK` if the server is up and running
 (temporary referance only)
 ```
 serveMux.Handle("/app/", http.StripPrefix("/app/", hits.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
